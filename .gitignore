@@ -14,15 +14,9 @@ docs/
 *.pywz
 *.pyzz
 .venv/
+venv/
 __pycache__/
 poetry.lock
 .pytest_cache/
-tests/
 botpy.log
-
-# Local logs and IDE
-botpy.log*
-.idea/
-
-# Local lockfile
-uv.lock
+tests/
