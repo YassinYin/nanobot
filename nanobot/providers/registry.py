@@ -103,6 +103,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
+    # Zenmux: OpenAI-compatible gateway.
+    # strip_model_prefix=False: keep full model name (e.g. "anthropic/claude-opus-4.6").
+    ProviderSpec(
+        name="zenmux",
+        keywords=("zenmux",),
+        env_key="ZENMUX_API_KEY",
+        display_name="Zenmux",
+        litellm_prefix="openai",            # → openai/{model}
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="zenmux",
+        default_api_base="https://zenmux.ai/api/v1",
+        strip_model_prefix=False,            # keep anthropic/claude-opus-4.6
+        model_overrides=(),
+    ),
+
     # === Standard providers (matched by model-name keywords) ===============
 
     # Anthropic: LiteLLM recognizes "claude-*" natively, no prefix needed.
