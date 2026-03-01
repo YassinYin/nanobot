@@ -31,6 +31,7 @@ class SubagentManager:
         brave_api_key: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
+        allowed_dirs: list[str] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.provider = provider
@@ -42,6 +43,7 @@ class SubagentManager:
         self.brave_api_key = brave_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_dirs = allowed_dirs or []
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
     
@@ -90,15 +92,16 @@ class SubagentManager:
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
-            allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            allowed_dirs = self._get_allowed_dirs()
+            tools.register(ReadFileTool(workspace=self.workspace, allowed_dirs=allowed_dirs))
+            tools.register(WriteFileTool(workspace=self.workspace, allowed_dirs=allowed_dirs))
+            tools.register(EditFileTool(workspace=self.workspace, allowed_dirs=allowed_dirs))
+            tools.register(ListDirTool(workspace=self.workspace, allowed_dirs=allowed_dirs))
             tools.register(ExecTool(
-                working_dir=str(self.workspace),
+                working_dir=self._pick_exec_working_dir(allowed_dirs),
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
+                allowed_dirs=allowed_dirs,
                 path_append=self.exec_config.path_append,
             ))
             tools.register(WebSearchTool(api_key=self.brave_api_key))
@@ -156,7 +159,7 @@ class SubagentManager:
                             "tool_call_id": tool_call.id,
                             "name": tool_call.name,
                             "content": result,
-                        })
+                    })
                 else:
                     final_result = response.content
                     break
@@ -171,6 +174,31 @@ class SubagentManager:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
+
+    def _get_allowed_dirs(self) -> list[Path] | None:
+        if self.allowed_dirs:
+            resolved: list[Path] = []
+            for raw in self.allowed_dirs:
+                p = Path(raw).expanduser()
+                if not p.is_absolute():
+                    p = self.workspace / p
+                resolved.append(p)
+            return resolved
+        if self.restrict_to_workspace:
+            return [self.workspace]
+        return None
+
+    def _pick_exec_working_dir(self, allowed_dirs: list[Path] | None) -> str:
+        if not allowed_dirs:
+            return str(self.workspace)
+        workspace = self.workspace.resolve()
+        for base in allowed_dirs:
+            try:
+                workspace.relative_to(base.resolve())
+                return str(workspace)
+            except ValueError:
+                continue
+        return str(allowed_dirs[0].resolve())
     
     async def _announce_result(
         self,

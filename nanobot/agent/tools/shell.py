@@ -19,6 +19,7 @@ class ExecTool(Tool):
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
+        allowed_dirs: list[str | Path] | None = None,
         path_append: str = "",
     ):
         self.timeout = timeout
@@ -36,6 +37,7 @@ class ExecTool(Tool):
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_dirs = self._normalize_allowed_dirs(allowed_dirs)
         self.path_append = path_append
     
     @property
@@ -135,11 +137,17 @@ class ExecTool(Tool):
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
-        if self.restrict_to_workspace:
+        allowed_dirs = self.allowed_dirs
+        if not allowed_dirs and self.restrict_to_workspace:
+            allowed_dirs = [Path(cwd).resolve()]
+
+        if allowed_dirs:
             if "..\\" in cmd or "../" in cmd:
                 return "Error: Command blocked by safety guard (path traversal detected)"
 
             cwd_path = Path(cwd).resolve()
+            if not self._is_path_allowed(cwd_path, allowed_dirs):
+                return "Error: Command blocked by safety guard (working dir outside allowed directories)"
 
             win_paths = re.findall(r"[A-Za-z]:\\[^\\\"']+", cmd)
             # Only match absolute paths — avoid false positives on relative
@@ -152,7 +160,31 @@ class ExecTool(Tool):
                     p = Path(raw.strip()).resolve()
                 except Exception:
                     continue
-                if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                    return "Error: Command blocked by safety guard (path outside working dir)"
+                if p.is_absolute() and not self._is_path_allowed(p, allowed_dirs):
+                    return "Error: Command blocked by safety guard (path outside allowed directories)"
 
         return None
+
+    @staticmethod
+    def _normalize_allowed_dirs(allowed_dirs: list[str | Path] | None) -> list[Path] | None:
+        if not allowed_dirs:
+            return None
+        normalized: list[Path] = []
+        for raw in allowed_dirs:
+            p = Path(raw).expanduser()
+            try:
+                p = p.resolve()
+            except Exception:
+                pass
+            normalized.append(p)
+        return normalized
+
+    @staticmethod
+    def _is_path_allowed(path: Path, allowed_dirs: list[Path]) -> bool:
+        for base in allowed_dirs:
+            try:
+                path.relative_to(base)
+                return True
+            except ValueError:
+                continue
+        return False

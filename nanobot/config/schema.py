@@ -221,6 +221,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
+    image_model: str = ""  # Optional: default image generation model
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
     temperature: float = 0.1
@@ -240,6 +241,7 @@ class ProviderConfig(Base):
     api_key: str = ""
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    image_api_base: str | None = None  # Optional: separate base URL for image generation
 
 
 class ProvidersConfig(Base):
@@ -317,6 +319,7 @@ class ToolsConfig(Base):
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
+    allowed_dirs: list[str] = Field(default_factory=list)  # Allowlist for tool access (overrides restrict_to_workspace when set)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 

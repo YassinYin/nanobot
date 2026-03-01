@@ -2,31 +2,62 @@
 
 import difflib
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from nanobot.agent.tools.base import Tool
 
 
-def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
+def _normalize_allowed_dirs(allowed_dirs: Iterable[str | Path] | None) -> list[Path] | None:
+    if not allowed_dirs:
+        return None
+    normalized: list[Path] = []
+    for raw in allowed_dirs:
+        p = Path(raw).expanduser()
+        try:
+            p = p.resolve()
+        except Exception:
+            pass
+        normalized.append(p)
+    return normalized
+
+
+def _is_within_allowed(path: Path, allowed_dirs: list[Path]) -> bool:
+    for base in allowed_dirs:
+        try:
+            path.relative_to(base)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _resolve_path(
+    path: str,
+    workspace: Path | None = None,
+    allowed_dirs: list[Path] | None = None,
+) -> Path:
     """Resolve path against workspace (if relative) and enforce directory restriction."""
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
-    if allowed_dir:
-        try:
-            resolved.relative_to(allowed_dir.resolve())
-        except ValueError:
-            raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
+    if allowed_dirs:
+        if not _is_within_allowed(resolved, allowed_dirs):
+            allowed = ", ".join(str(d) for d in allowed_dirs)
+            raise PermissionError(f"Path {path} is outside allowed directories: {allowed}")
     return resolved
 
 
 class ReadFileTool(Tool):
     """Tool to read file contents."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dirs: Iterable[str | Path] | None = None,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = _normalize_allowed_dirs(allowed_dirs)
 
     @property
     def name(self) -> str:
@@ -51,7 +82,7 @@ class ReadFileTool(Tool):
     
     async def execute(self, path: str, **kwargs: Any) -> str:
         try:
-            file_path = _resolve_path(path, self._workspace, self._allowed_dir)
+            file_path = _resolve_path(path, self._workspace, self._allowed_dirs)
             if not file_path.exists():
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
@@ -68,9 +99,13 @@ class ReadFileTool(Tool):
 class WriteFileTool(Tool):
     """Tool to write content to a file."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dirs: Iterable[str | Path] | None = None,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = _normalize_allowed_dirs(allowed_dirs)
 
     @property
     def name(self) -> str:
@@ -99,7 +134,7 @@ class WriteFileTool(Tool):
     
     async def execute(self, path: str, content: str, **kwargs: Any) -> str:
         try:
-            file_path = _resolve_path(path, self._workspace, self._allowed_dir)
+            file_path = _resolve_path(path, self._workspace, self._allowed_dirs)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {file_path}"
@@ -112,9 +147,13 @@ class WriteFileTool(Tool):
 class EditFileTool(Tool):
     """Tool to edit a file by replacing text."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dirs: Iterable[str | Path] | None = None,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = _normalize_allowed_dirs(allowed_dirs)
 
     @property
     def name(self) -> str:
@@ -147,7 +186,7 @@ class EditFileTool(Tool):
     
     async def execute(self, path: str, old_text: str, new_text: str, **kwargs: Any) -> str:
         try:
-            file_path = _resolve_path(path, self._workspace, self._allowed_dir)
+            file_path = _resolve_path(path, self._workspace, self._allowed_dirs)
             if not file_path.exists():
                 return f"Error: File not found: {path}"
 
@@ -196,9 +235,13 @@ class EditFileTool(Tool):
 class ListDirTool(Tool):
     """Tool to list directory contents."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dirs: Iterable[str | Path] | None = None,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = _normalize_allowed_dirs(allowed_dirs)
 
     @property
     def name(self) -> str:
@@ -223,7 +266,7 @@ class ListDirTool(Tool):
     
     async def execute(self, path: str, **kwargs: Any) -> str:
         try:
-            dir_path = _resolve_path(path, self._workspace, self._allowed_dir)
+            dir_path = _resolve_path(path, self._workspace, self._allowed_dirs)
             if not dir_path.exists():
                 return f"Error: Directory not found: {path}"
             if not dir_path.is_dir():
