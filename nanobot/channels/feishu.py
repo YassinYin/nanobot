@@ -364,6 +364,8 @@ class FeishuChannel(BaseChannel):
 
         Common emoji types: THUMBSUP, OK, EYES, DONE, OnIt, HEART
         """
+        if not emoji_type:
+            return
         if not self._client or not Emoji:
             return
 

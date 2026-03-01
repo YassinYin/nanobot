@@ -287,9 +287,11 @@ def gateway(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_dirs=config.tools.allowed_dirs,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        config=config,
     )
 
     # Set cron callback (needs agent)
@@ -447,8 +449,10 @@ def agent(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_dirs=config.tools.allowed_dirs,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        config=config,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -940,8 +944,10 @@ def cron_run(
         brave_api_key=config.tools.web.search.api_key or None,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_dirs=config.tools.allowed_dirs,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        config=config,
     )
 
     store_path = get_data_dir() / "cron" / "jobs.json"

@@ -18,6 +18,7 @@ from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from nanobot.agent.tools.message import MessageTool
+from nanobot.agent.tools.image import ImageGenerateTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
@@ -28,7 +29,7 @@ from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig
+    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, Config
     from nanobot.cron.service import CronService
 
 
@@ -61,9 +62,11 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        allowed_dirs: list[str] | None = None,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        config: "Config | None" = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -80,6 +83,7 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_dirs = allowed_dirs or []
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -95,6 +99,7 @@ class AgentLoop:
             brave_api_key=brave_api_key,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            allowed_dirs=self.allowed_dirs,
         )
 
         self._running = False
@@ -107,25 +112,55 @@ class AgentLoop:
         self._consolidation_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._processing_lock = asyncio.Lock()
+        self.config = config
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
+        allowed_dirs = self._get_allowed_dirs()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
+        exec_working_dir = self._pick_exec_working_dir(allowed_dirs)
         self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
+            working_dir=exec_working_dir,
             timeout=self.exec_config.timeout,
             restrict_to_workspace=self.restrict_to_workspace,
+            allowed_dirs=allowed_dirs,
             path_append=self.exec_config.path_append,
         ))
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        if self.config:
+            self.tools.register(ImageGenerateTool(config=self.config))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+    def _get_allowed_dirs(self) -> list[Path] | None:
+        if self.allowed_dirs:
+            resolved: list[Path] = []
+            for raw in self.allowed_dirs:
+                p = Path(raw).expanduser()
+                if not p.is_absolute():
+                    p = self.workspace / p
+                resolved.append(p)
+            return resolved
+        if self.restrict_to_workspace:
+            return [self.workspace]
+        return None
+
+    def _pick_exec_working_dir(self, allowed_dirs: list[Path] | None) -> str:
+        if not allowed_dirs:
+            return str(self.workspace)
+        workspace = self.workspace.resolve()
+        for base in allowed_dirs:
+            try:
+                workspace.relative_to(base.resolve())
+                return str(workspace)
+            except ValueError:
+                continue
+        return str(allowed_dirs[0].resolve())
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
