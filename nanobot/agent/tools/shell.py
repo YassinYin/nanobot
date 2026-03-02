@@ -142,8 +142,17 @@ class ExecTool(Tool):
             allowed_dirs = [Path(cwd).resolve()]
 
         if allowed_dirs:
-            if "..\\" in cmd or "../" in cmd:
+            # Enhanced path traversal detection
+            if "..\\" in cmd or "../" in cmd or "/.." in cmd:
                 return "Error: Command blocked by safety guard (path traversal detected)"
+
+            # Check for tilde expansion and environment variables
+            if "~" in cmd or "$HOME" in cmd or "$USER" in cmd or "${" in cmd:
+                return "Error: Command blocked by safety guard (environment variable or tilde expansion not allowed in sandbox mode)"
+
+            # Check for command substitution that could be used to escape sandbox
+            if "`" in cmd or "$(" in cmd:
+                return "Error: Command blocked by safety guard (command substitution not allowed in sandbox mode)"
 
             cwd_path = Path(cwd).resolve()
             if not self._is_path_allowed(cwd_path, allowed_dirs):

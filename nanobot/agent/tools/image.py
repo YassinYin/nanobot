@@ -37,6 +37,7 @@ class ImageGenerateTool(Tool):
     def description(self) -> str:
         return (
             "Generate image(s) from a text prompt using the configured image model. "
+            "Optionally accepts an input image path for image-to-image generation (supported by google/gemini models). "
             "Returns local file paths; to deliver images to the user, call the message tool "
             "with media set to those paths."
         )
@@ -48,6 +49,7 @@ class ImageGenerateTool(Tool):
             "properties": {
                 "prompt": {"type": "string", "description": "Image generation prompt"},
                 "model": {"type": "string", "description": "Optional: override image model"},
+                "input_image": {"type": "string", "description": "Optional: path to input image for image-to-image generation (supports google/gemini models)"},
                 "n": {"type": "integer", "minimum": 1, "maximum": 4, "description": "Number of images"},
                 "size": {"type": "string", "description": "Image size (e.g., 1024x1024)"},
                 "quality": {"type": "string", "description": "Image quality (provider-specific)"},
@@ -62,6 +64,7 @@ class ImageGenerateTool(Tool):
         self,
         prompt: str,
         model: str | None = None,
+        input_image: str | None = None,
         n: int | None = None,
         size: str | None = None,
         quality: str | None = None,
@@ -105,6 +108,7 @@ class ImageGenerateTool(Tool):
                 api_key=api_key,
                 api_base=image_api_base or api_base or "https://zenmux.ai/api/vertex-ai",
                 output_dir=self._output_dir,
+                input_image=input_image,
             )
 
         # Ensure LiteLLM environment is prepared for this provider/model.
@@ -233,6 +237,7 @@ async def _generate_with_google_genai(
     api_key: str | None,
     api_base: str,
     output_dir: Path,
+    input_image: str | None = None,
 ) -> str:
     if not api_key:
         return "Error: Missing API key for Google GenAI image generation."
@@ -252,9 +257,46 @@ async def _generate_with_google_genai(
             vertexai=True,
             http_options=types.HttpOptions(api_version="v1", base_url=api_base),
         )
+
+        # Prepare contents list
+        contents = []
+
+        # Add input image if provided
+        if input_image:
+            try:
+                image_path = Path(input_image).expanduser()
+                if not image_path.exists():
+                    raise FileNotFoundError(f"Input image not found: {input_image}")
+
+                # Read and encode image
+                image_data = image_path.read_bytes()
+
+                # Detect MIME type
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(str(image_path))
+                if not mime_type or not mime_type.startswith("image/"):
+                    # Fallback to common types
+                    ext = image_path.suffix.lower()
+                    mime_map = {
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".png": "image/png",
+                        ".gif": "image/gif",
+                        ".webp": "image/webp",
+                    }
+                    mime_type = mime_map.get(ext, "image/png")
+
+                # Add image part
+                contents.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+            except Exception as e:
+                raise ValueError(f"Failed to load input image: {str(e)}")
+
+        # Add text prompt
+        contents.append(prompt)
+
         return client.models.generate_content(
             model=model,
-            contents=[prompt],
+            contents=contents,
             config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
         )
 

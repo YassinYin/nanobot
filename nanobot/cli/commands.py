@@ -184,6 +184,14 @@ def onboard():
     if not workspace.exists():
         workspace.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace}")
+    else:
+        # Workspace exists, check for path changes
+        from nanobot.utils.helpers import check_workspace_migration, migrate_workspace_data
+        needs_migration, old_workspace = check_workspace_migration(workspace)
+        if needs_migration and old_workspace:
+            console.print(f"\n[yellow]Note: Previous workspace detected at {old_workspace}[/yellow]")
+            if typer.confirm("Migrate data from old workspace?", default=True):
+                migrate_workspace_data(old_workspace, workspace, silent=False)
 
     sync_workspace_templates(workspace)
 
@@ -255,6 +263,7 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
+    from nanobot.utils.helpers import check_workspace_migration, migrate_workspace_data
 
     if verbose:
         import logging
@@ -263,6 +272,40 @@ def gateway(
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
 
     config = load_config()
+
+    # Check for workspace path changes
+    needs_migration, old_workspace = check_workspace_migration(config.workspace_path)
+    if needs_migration and old_workspace:
+        console.print(f"\n[yellow]⚠️  Workspace path has changed![/yellow]")
+        console.print(f"  Old workspace: [cyan]{old_workspace}[/cyan]")
+        console.print(f"  New workspace: [cyan]{config.workspace_path}[/cyan]")
+        console.print(f"\n[yellow]Your old workspace contains important data.[/yellow]")
+        console.print("Would you like to migrate your data to the new workspace?")
+        console.print("  [bold]y[/bold] = Migrate data (recommended)")
+        console.print("  [bold]n[/bold] = Start with fresh templates (old data will be kept but not used)")
+        console.print("  [bold]c[/bold] = Cancel and exit\n")
+
+        choice = typer.prompt("Your choice [y/n/c]", default="y").lower()
+
+        if choice == 'c':
+            console.print("[yellow]Gateway startup cancelled.[/yellow]")
+            raise typer.Exit(0)
+        elif choice == 'y':
+            console.print("\n[cyan]Migrating workspace data...[/cyan]")
+            if migrate_workspace_data(old_workspace, config.workspace_path):
+                console.print("[green]✓[/green] Migration completed successfully!\n")
+            else:
+                console.print("[yellow]⚠️  Migration completed with some warnings.[/yellow]\n")
+        else:
+            # Update record to suppress future warnings
+            import json
+            workspace_record = get_data_dir() / "workspace_record.json"
+            workspace_record.write_text(
+                json.dumps({"path": str(config.workspace_path.resolve())}),
+                encoding="utf-8"
+            )
+            console.print(f"[yellow]Starting with new workspace. Old data remains at {old_workspace}[/yellow]\n")
+
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -419,8 +462,34 @@ def agent(
     from nanobot.bus.queue import MessageBus
     from nanobot.config.loader import get_data_dir, load_config
     from nanobot.cron.service import CronService
+    from nanobot.utils.helpers import check_workspace_migration, migrate_workspace_data
 
     config = load_config()
+
+    # Check for workspace path changes (silent version for agent command)
+    needs_migration, old_workspace = check_workspace_migration(config.workspace_path)
+    if needs_migration and old_workspace:
+        console.print(f"\n[yellow]⚠️  Workspace path has changed![/yellow]")
+        console.print(f"  Old: [cyan]{old_workspace}[/cyan]")
+        console.print(f"  New: [cyan]{config.workspace_path}[/cyan]")
+        console.print("\nMigrate data from old workspace? [y/n/c]")
+
+        choice = typer.prompt("Your choice", default="y").lower()
+
+        if choice == 'c':
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(0)
+        elif choice == 'y':
+            if migrate_workspace_data(old_workspace, config.workspace_path, silent=True):
+                console.print("[green]✓[/green] Migration completed\n")
+        else:
+            import json
+            workspace_record = get_data_dir() / "workspace_record.json"
+            workspace_record.write_text(
+                json.dumps({"path": str(config.workspace_path.resolve())}),
+                encoding="utf-8"
+            )
+
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()

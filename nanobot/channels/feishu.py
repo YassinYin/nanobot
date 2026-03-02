@@ -566,7 +566,7 @@ class FeishuChannel(BaseChannel):
             (file_path, content_text) - file_path is None if download failed
         """
         loop = asyncio.get_running_loop()
-        media_dir = Path.home() / ".nanobot" / "media"
+        media_dir = Path("/Users/yinrongjie/Desktop/nanobot/receiv_img")
         media_dir.mkdir(parents=True, exist_ok=True)
 
         data, filename = None, None
@@ -726,13 +726,21 @@ class FeishuChannel(BaseChannel):
                     )
                     if file_path:
                         media_paths.append(file_path)
-                    content_parts.append(content_text)
+                        content_parts.append(f"[Image downloaded to: {file_path}]")
+                    else:
+                        content_parts.append(content_text)
 
             elif msg_type in ("image", "audio", "file", "media"):
                 file_path, content_text = await self._download_and_save_media(msg_type, content_json, message_id)
                 if file_path:
                     media_paths.append(file_path)
-                content_parts.append(content_text)
+                    # For images, tell the agent the local path explicitly
+                    if msg_type == "image":
+                        content_parts.append(f"[Image downloaded to: {file_path}]")
+                    else:
+                        content_parts.append(content_text)
+                else:
+                    content_parts.append(content_text)
 
             elif msg_type in ("share_chat", "share_user", "interactive", "share_calendar_event", "system", "merge_forward"):
                 # Handle share cards and interactive messages

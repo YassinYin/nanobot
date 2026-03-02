@@ -23,6 +23,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+from nanobot.agent.tools.feishu import FeishuDownloadImageTool, FeishuExtractImageKeyTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
@@ -133,6 +134,10 @@ class AgentLoop:
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         if self.config:
             self.tools.register(ImageGenerateTool(config=self.config))
+            # Register Feishu tools if Feishu channel is enabled
+            if self.config.channels.feishu.enabled:
+                self.tools.register(FeishuDownloadImageTool(config=self.config))
+                self.tools.register(FeishuExtractImageKeyTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
