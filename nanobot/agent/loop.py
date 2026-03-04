@@ -214,6 +214,83 @@ class AgentLoop:
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
+    def _is_model_switch_request(self, content: str) -> bool:
+        """Check if the message is a simple model switch request (just a keyword)."""
+        if not self.config:
+            return False
+        content_lower = content.strip().lower()
+        # Only single-word keywords without punctuation
+        if len(content_lower.split()) > 1 or any(c in content_lower for c in ",.!?;:"):
+            return False
+        # Check if it matches any model keyword
+        model_keywords = ["minimax", "claude", "gpt", "deepseek", "qwen", "kimi", "gemini", "zenmux"]
+        return content_lower in model_keywords
+
+    def _switch_model(self, keyword: str) -> str | None:
+        """Switch to a model based on keyword. Returns success/error message."""
+        if not self.config:
+            return "❌ Configuration not available"
+
+        # Define model keywords to detect - keyword -> list of providers to check
+        model_keywords = {
+            "minimax": ["dashscope"],
+            "claude": ["zenmux", "anthropic"],
+            "gpt": ["openai"],
+            "deepseek": ["deepseek"],
+            "qwen": ["dashscope"],
+            "kimi": ["moonshot"],
+            "gemini": ["gemini"],
+            "zenmux": ["zenmux"],
+        }
+
+        keyword_lower = keyword.lower()
+        if keyword_lower not in model_keywords:
+            return f"❌ Unknown model keyword: {keyword}\nAvailable: minimax, claude, gpt, deepseek, qwen, kimi, gemini, zenmux"
+
+        # Try each provider in order until we find one with a model configured
+        for provider_name in model_keywords[keyword_lower]:
+            provider_cfg = getattr(self.config.providers, provider_name, None)
+            if provider_cfg and provider_cfg.model:
+                from nanobot.providers.registry import find_by_model, find_gateway
+                import litellm
+                import os
+
+                old_model = self.model
+                self.model = provider_cfg.model
+
+                # Update provider's api_key and api_base
+                if hasattr(self.provider, 'api_key') and provider_cfg.api_key:
+                    self.provider.api_key = provider_cfg.api_key
+
+                if hasattr(self.provider, 'api_base') and provider_cfg.api_base:
+                    self.provider.api_base = provider_cfg.api_base
+                    litellm.api_base = provider_cfg.api_base
+
+                if hasattr(self.provider, 'extra_headers') and provider_cfg.extra_headers:
+                    self.provider.extra_headers = provider_cfg.extra_headers
+
+                # Update provider's _gateway attribute
+                if hasattr(self.provider, '_gateway'):
+                    spec = find_gateway(provider_name, provider_cfg.api_key, provider_cfg.api_base)
+                    self.provider._gateway = spec
+
+                # Update environment variables
+                if provider_cfg.api_key:
+                    spec = find_gateway(provider_name, provider_cfg.api_key, provider_cfg.api_base)
+                    if not spec:
+                        spec = find_by_model(self.model)
+                    if spec and spec.env_key:
+                        os.environ[spec.env_key] = provider_cfg.api_key
+                        for env_name, env_val in spec.env_extras:
+                            resolved = env_val.replace("{api_key}", provider_cfg.api_key)
+                            resolved = resolved.replace("{api_base}", provider_cfg.api_base or spec.default_api_base or "")
+                            os.environ.setdefault(env_name, resolved)
+
+                logger.info("Model switched from {} to {} (provider: {})", old_model, self.model, provider_name)
+                return f"✅ 模型切换成功\n当前模型: {self.model}\n提供商: {provider_name}"
+
+        return f"❌ No configured provider found for: {keyword}\nPlease configure the provider in ~/.nanobot/config.json"
+
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
@@ -227,6 +304,19 @@ class AgentLoop:
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Ensure litellm uses correct api_base for current model before each call
+            if self.config:
+                import litellm
+                from nanobot.providers.registry import find_by_model, find_gateway
+                model = self.model or self.provider.default_model
+
+                # Find the right provider config based on model
+                provider_name = self.config.get_provider_name(model)
+                if provider_name:
+                    provider_cfg = getattr(self.config.providers, provider_name, None)
+                    if provider_cfg and provider_cfg.api_base:
+                        litellm.api_base = provider_cfg.api_base
 
             response = await self.provider.chat(
                 messages=messages,
@@ -428,7 +518,21 @@ class AgentLoop:
                                   content="New session started.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
+                                  content="🐈 nanobot 命令:\n/new — 开始新对话\n/stop — 停止当前任务\n/model — 显示当前模型\n/model <name> — 切换模型 (例如: minimax, claude, gpt)\n/help — 显示帮助信息\n\n💡 快捷切换: 直接输入模型名即可切换 (minimax, claude, gpt, deepseek, qwen, kimi, gemini, zenmux)")
+
+        # Model switching command: /model [<keyword>] or just <keyword>
+        if cmd == "/model":
+            # Show current model
+            provider_name = self.config.get_provider_name(self.model) if self.config else "unknown"
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content=f"📊 当前模型信息\n模型: {self.model}\n提供商: {provider_name}"
+            )
+        if cmd.startswith("/model ") or self._is_model_switch_request(msg.content):
+            keyword = cmd.replace("/model ", "").strip() if cmd.startswith("/model ") else cmd
+            switch_result = self._switch_model(keyword)
+            if switch_result:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=switch_result)
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if (unconsolidated >= self.memory_window and session.key not in self._consolidating):
@@ -484,9 +588,14 @@ class AgentLoop:
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        # Add model info to metadata for display
+        response_metadata = dict(msg.metadata or {})
+        response_metadata["model"] = self.model
+
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
-            metadata=msg.metadata or {},
+            metadata=response_metadata,
         )
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
@@ -527,9 +636,9 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-    ) -> str:
-        """Process a message directly (for CLI or cron usage)."""
+    ) -> tuple[str, dict | None]:
+        """Process a message directly (for CLI or cron usage). Returns (content, metadata)."""
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
         response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
-        return response.content if response else ""
+        return (response.content, response.metadata) if response else ("", None)

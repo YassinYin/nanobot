@@ -629,6 +629,11 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu client not initialized")
             return
 
+        # Add model tag to message if available
+        model_tag = ""
+        if msg.metadata and (model := msg.metadata.get("model")):
+            model_tag = f"🤖 **{model}**\n\n"
+
         try:
             receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
             loop = asyncio.get_running_loop()
@@ -655,7 +660,8 @@ class FeishuChannel(BaseChannel):
                         )
 
             if msg.content and msg.content.strip():
-                card = {"config": {"wide_screen_mode": True}, "elements": self._build_card_elements(msg.content)}
+                content_with_tag = model_tag + msg.content
+                card = {"config": {"wide_screen_mode": True}, "elements": self._build_card_elements(content_with_tag)}
                 await loop.run_in_executor(
                     None, self._send_message_sync,
                     receive_id_type, msg.chat_id, "interactive", json.dumps(card, ensure_ascii=False),

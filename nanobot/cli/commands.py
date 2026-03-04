@@ -97,12 +97,18 @@ def _init_prompt_session() -> None:
     )
 
 
-def _print_agent_response(response: str, render_markdown: bool) -> None:
+def _print_agent_response(response: str, render_markdown: bool, metadata: dict | None = None) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
-    console.print(f"[cyan]{__logo__} nanobot[/cyan]")
+
+    # Add model tag if available
+    model_tag = ""
+    if metadata and (model := metadata.get("model")):
+        model_tag = f"[dim]🤖 {model}[/dim]\n"
+
+    console.print(f"[cyan]{__logo__} nanobot[/cyan]{model_tag}")
     console.print(body)
     console.print()
 
@@ -340,7 +346,7 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        response = await agent.process_direct(
+        response, _ = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
             channel=job.payload.channel or "cli",
@@ -383,13 +389,14 @@ def gateway(
         async def _silent(*_args, **_kwargs):
             pass
 
-        return await agent.process_direct(
+        response, _ = await agent.process_direct(
             tasks,
             session_key="heartbeat",
             channel=channel,
             chat_id=chat_id,
             on_progress=_silent,
         )
+        return response
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
@@ -544,8 +551,8 @@ def agent(
         # Single message mode — direct call, no bus needed
         async def run_once():
             with _thinking_ctx():
-                response = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
-            _print_agent_response(response, render_markdown=markdown)
+                response, metadata = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
+            _print_agent_response(response, render_markdown=markdown, metadata=metadata)
             await agent_loop.close_mcp()
 
         asyncio.run(run_once())
@@ -588,11 +595,11 @@ def agent(
                                 console.print(f"  [dim]↳ {msg.content}[/dim]")
                         elif not turn_done.is_set():
                             if msg.content:
-                                turn_response.append(msg.content)
+                                turn_response.append(msg)
                             turn_done.set()
                         elif msg.content:
                             console.print()
-                            _print_agent_response(msg.content, render_markdown=markdown)
+                            _print_agent_response(msg.content, render_markdown=markdown, metadata=msg.metadata)
                     except asyncio.TimeoutError:
                         continue
                     except asyncio.CancelledError:
@@ -628,7 +635,8 @@ def agent(
                             await turn_done.wait()
 
                         if turn_response:
-                            _print_agent_response(turn_response[0], render_markdown=markdown)
+                            last_msg = turn_response[0]
+                            _print_agent_response(last_msg.content, render_markdown=markdown, metadata=last_msg.metadata)
                     except KeyboardInterrupt:
                         _restore_terminal()
                         console.print("\nGoodbye!")
@@ -1025,7 +1033,7 @@ def cron_run(
     result_holder = []
 
     async def on_job(job: CronJob) -> str | None:
-        response = await agent_loop.process_direct(
+        response, _ = await agent_loop.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
             channel=job.payload.channel or "cli",

@@ -243,6 +243,7 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     image_api_base: str | None = None  # Optional: separate base URL for image generation
+    model: str | None = None  # Explicit model for this provider (enables auto-routing)
 
 
 class ProvidersConfig(Base):
@@ -355,6 +356,26 @@ class Config(BaseSettings):
         def _kw_matches(kw: str) -> bool:
             kw = kw.lower()
             return kw in model_lower or kw.replace("-", "_") in model_normalized
+
+        def _model_matches(configured_model: str | None, request_model: str) -> bool:
+            """Check if configured model matches requested model (handles prefixes)."""
+            if not configured_model:
+                return False
+            cfg_lower = configured_model.lower()
+            req_lower = request_model.lower()
+            # Exact match or configured_model is prefix of request_model
+            # Also match if either string contains the other (bidirectional substring match)
+            return (cfg_lower == req_lower or
+                    req_lower.startswith(cfg_lower + "/") or
+                    cfg_lower in req_lower or
+                    req_lower in cfg_lower)
+
+        # NEW: Match by explicit model configuration in provider
+        for spec in PROVIDERS:
+            p = getattr(self.providers, spec.name, None)
+            if p and p.model and _model_matches(p.model, model or self.agents.defaults.model):
+                if spec.is_oauth or p.api_key:
+                    return p, spec.name
 
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in PROVIDERS:

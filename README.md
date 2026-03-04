@@ -109,6 +109,24 @@ pip install -e .
 uv tool install nanobot-ai
 ```
 
+**Install local source as an editable uv tool** (recommended for project contributors)
+
+```bash
+git clone https://github.com/HKUDS/nanobot.git
+cd nanobot
+uv sync
+uv tool install -e . --force
+```
+
+`editable` means the global `nanobot` command points to your local repo source. After pulling code changes, refresh the tool environment so dependency updates are applied:
+
+```bash
+cd nanobot
+uv sync
+uv tool install -e . --force
+nanobot gateway
+```
+
 **Install from PyPI** (stable)
 
 ```bash

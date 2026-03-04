@@ -314,11 +314,12 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
 
     # DashScope: Qwen models, needs "dashscope/" prefix.
+    # Also supports Alibaba Cloud BaiLian (百炼) models via custom endpoint
     ProviderSpec(
         name="dashscope",
-        keywords=("qwen", "dashscope"),
+        keywords=("qwen", "dashscope", "minimax"),
         env_key="DASHSCOPE_API_KEY",
-        display_name="DashScope",
+        display_name="DashScope/BaiLian",
         litellm_prefix="dashscope",         # qwen-max → dashscope/qwen-max
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
@@ -326,7 +327,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://dashscope.aliyuncs.com/v1",  # Default DashScope
         strip_model_prefix=False,
         model_overrides=(),
     ),
